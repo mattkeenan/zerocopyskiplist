@@ -111,7 +111,7 @@ func TestMakeZeroCopySkiplist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sl := makeZeroCopySkiplist(tt.maxLevel, getIntKey, getIntItemSize, cmpInt)
+			sl := MakeZeroCopySkiplist(tt.maxLevel, getIntKey, getIntItemSize, cmpInt)
 
 			if sl == nil {
 				t.Fatal("Expected non-nil skiplist")
@@ -131,7 +131,7 @@ func TestMakeZeroCopySkiplist(t *testing.T) {
 
 // TestInsertBasic tests basic insertion functionality
 func TestInsertBasic(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Test inserting nil item
 	if sl.Insert(nil) {
@@ -167,7 +167,7 @@ func TestInsertBasic(t *testing.T) {
 
 // TestInsertDuplicates tests handling of duplicate keys
 func TestInsertDuplicates(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	item1 := &TestItem{ID: 5, Name: "first"}
 	item2 := &TestItem{ID: 5, Name: "second"}
@@ -199,7 +199,7 @@ func TestInsertDuplicates(t *testing.T) {
 
 // TestFind tests the Find functionality
 func TestFind(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Test finding in empty skiplist
 	if found := sl.Find(5); found != nil {
@@ -241,7 +241,7 @@ func TestFind(t *testing.T) {
 
 // TestFirstLast tests First and Last functionality
 func TestFirstLast(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Test empty skiplist
 	if first := sl.First(); first != nil {
@@ -279,7 +279,7 @@ func TestFirstLast(t *testing.T) {
 
 // TestNavigation tests Next and Prev functionality
 func TestNavigation(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Insert items
 	keys := []int{1, 3, 5, 7, 9}
@@ -326,7 +326,7 @@ func TestNavigation(t *testing.T) {
 
 // TestOrdering tests that items are properly ordered
 func TestOrdering(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Insert random keys
 	rand.Seed(time.Now().UnixNano())
@@ -372,7 +372,7 @@ func TestOrdering(t *testing.T) {
 
 // TestStringKeys tests skiplist with string keys
 func TestStringKeys(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getStringKey, getStringItemSize, cmpString)
+	sl := MakeZeroCopySkiplist(16, getStringKey, getStringItemSize, cmpString)
 
 	items := []*StringItem{
 		{Key: "delta", Value: 4},
@@ -409,7 +409,7 @@ func TestStringKeys(t *testing.T) {
 
 // TestSingleItem tests skiplist with a single item
 func TestSingleItem(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	item := &TestItem{ID: 42, Name: "answer"}
 	sl.Insert(item)
@@ -441,7 +441,7 @@ func TestLargeDataset(t *testing.T) {
 		t.Skip("Skipping large dataset test in short mode")
 	}
 
-	sl := makeZeroCopySkiplist(20, getLargeTestKey, getLargeTestItemSize, cmpString)
+	sl := MakeZeroCopySkiplist(20, getLargeTestKey, getLargeTestItemSize, cmpString)
 
 	// Insert 1,000,000 items with deterministic string keys
 	n := 1000000
@@ -630,7 +630,7 @@ func TestLargeDataset(t *testing.T) {
 
 // BenchmarkInsert benchmarks insertion performance
 func BenchmarkInsert(b *testing.B) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 	items := make([]*TestItem, b.N)
 
 	for i := 0; i < b.N; i++ {
@@ -645,7 +645,7 @@ func BenchmarkInsert(b *testing.B) {
 
 // BenchmarkFind benchmarks search performance
 func BenchmarkFind(b *testing.B) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Pre-populate with 10,000 items
 	for i := 0; i < 10000; i++ {
@@ -661,7 +661,7 @@ func BenchmarkFind(b *testing.B) {
 
 // BenchmarkDelete benchmarks deletion performance
 func BenchmarkDelete(b *testing.B) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Pre-populate with items
 	for i := 0; i < b.N; i++ {
@@ -678,8 +678,8 @@ func BenchmarkDelete(b *testing.B) {
 // BenchmarkMerge benchmarks merge performance
 func BenchmarkMerge(b *testing.B) {
 	// Create two skiplists with non-overlapping keys for fair benchmark
-	sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-	sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Populate first skiplist with even numbers
 	for i := 0; i < b.N; i += 2 {
@@ -702,7 +702,7 @@ func BenchmarkMerge(b *testing.B) {
 
 // TestConcurrentAccess tests thread safety with concurrent operations
 func TestConcurrentAccess(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Number of goroutines and operations
 	numWriters := 5
@@ -790,7 +790,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 // TestCopy tests the Copy functionality
 func TestCopy(t *testing.T) {
-	original := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	original := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Test copying empty skiplist
 	emptyCopy := original.Copy()
@@ -869,7 +869,7 @@ func TestCopy(t *testing.T) {
 
 // TestToPwritevSlice tests the ToPwritevSlice functionality
 func TestToPwritevSlice(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Test empty skiplist
 	emptyBuffers := sl.ToPwritevSlice(func(item *TestItem) []byte {
@@ -923,7 +923,7 @@ func TestToPwritevSlice(t *testing.T) {
 
 // TestToPwritevSliceWithCustomSerializer tests ToPwritevSlice with custom serialization
 func TestToPwritevSliceWithCustomSerializer(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Insert items
 	items := []*TestItem{
@@ -964,7 +964,7 @@ func TestToPwritevSliceWithCustomSerializer(t *testing.T) {
 
 // TestToPwritevSliceZeroSize tests ToPwritevSlice with zero-size serialization
 func TestToPwritevSliceZeroSize(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	item := &TestItem{ID: 5, Name: "test"}
 	sl.Insert(item)
@@ -984,8 +984,8 @@ func TestToPwritevSliceZeroSize(t *testing.T) {
 func TestMerge(t *testing.T) {
 	// Test MergeTheirs strategy
 	t.Run("MergeTheirs", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		// Add items to first skiplist
 		items1 := []*TestItem{
@@ -1046,8 +1046,8 @@ func TestMerge(t *testing.T) {
 
 	// Test MergeOurs strategy
 	t.Run("MergeOurs", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		// Add items to first skiplist
 		items1 := []*TestItem{
@@ -1098,8 +1098,8 @@ func TestMerge(t *testing.T) {
 
 	// Test MergeError strategy
 	t.Run("MergeError", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		// Add items to first skiplist
 		item1 := &TestItem{ID: 1, Name: "one"}
@@ -1136,7 +1136,7 @@ func TestMerge(t *testing.T) {
 func TestMergeEdgeCases(t *testing.T) {
 	// Test merging with nil skiplist
 	t.Run("MergeNil", func(t *testing.T) {
-		sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		err := sl.Merge(nil, MergeTheirs)
 		if err != nil {
@@ -1146,8 +1146,8 @@ func TestMergeEdgeCases(t *testing.T) {
 
 	// Test merging empty skiplists
 	t.Run("MergeEmpty", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		err := sl1.Merge(sl2, MergeTheirs)
 		if err != nil {
@@ -1161,8 +1161,8 @@ func TestMergeEdgeCases(t *testing.T) {
 
 	// Test merging into empty skiplist
 	t.Run("MergeIntoEmpty", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		// Add items only to second skiplist
 		items := []*TestItem{
@@ -1197,8 +1197,8 @@ func TestMergeEdgeCases(t *testing.T) {
 
 	// Test merging from empty skiplist
 	t.Run("MergeFromEmpty", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		// Add items only to first skiplist
 		item := &TestItem{ID: 1, Name: "one"}
@@ -1218,8 +1218,8 @@ func TestMergeEdgeCases(t *testing.T) {
 
 	// Test merging with incompatible maxLevel
 	t.Run("MergeIncompatibleMaxLevel", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(8, getIntKey, getIntItemSize, cmpInt) // Different maxLevel
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(8, getIntKey, getIntItemSize, cmpInt) // Different maxLevel
 
 		err := sl1.Merge(sl2, MergeTheirs)
 		if err == nil {
@@ -1229,8 +1229,8 @@ func TestMergeEdgeCases(t *testing.T) {
 
 	// Test invalid merge strategy
 	t.Run("InvalidMergeStrategy", func(t *testing.T) {
-		sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-		sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+		sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 		// Add an item to trigger strategy handling
 		item := &TestItem{ID: 1, Name: "test"}
@@ -1248,8 +1248,8 @@ func TestMergeEdgeCases(t *testing.T) {
 
 // TestMergeOrdering tests that merge preserves correct ordering
 func TestMergeOrdering(t *testing.T) {
-	sl1 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
-	sl2 := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl1 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl2 := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Add items to first skiplist (odd numbers)
 	for i := 1; i <= 9; i += 2 {
@@ -1289,7 +1289,7 @@ func TestMergeOrdering(t *testing.T) {
 
 // TestDelete tests the Delete functionality
 func TestDelete(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Test deleting from empty skiplist
 	if sl.Delete(5) {
@@ -1356,7 +1356,7 @@ func TestDelete(t *testing.T) {
 
 // TestDeleteFirstLast tests deleting first and last items
 func TestDeleteFirstLast(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Insert items
 	keys := []int{2, 4, 6, 8, 10}
@@ -1415,7 +1415,7 @@ func TestDeleteFirstLast(t *testing.T) {
 
 // TestDeleteSingleItem tests deleting the only item in skiplist
 func TestDeleteSingleItem(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	item := &TestItem{ID: 42, Name: "answer"}
 	sl.Insert(item)
@@ -1449,7 +1449,7 @@ func TestDeleteSingleItem(t *testing.T) {
 
 // TestDeleteAllItems tests deleting all items one by one
 func TestDeleteAllItems(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Insert items
 	keys := []int{1, 3, 5, 7, 9}
@@ -1487,7 +1487,7 @@ func TestDeleteAllItems(t *testing.T) {
 
 // TestDeleteWithDuplicateAttempts tests multiple delete attempts on same key
 func TestDeleteWithDuplicateAttempts(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	item := &TestItem{ID: 10, Name: "ten"}
 	sl.Insert(item)
@@ -1514,7 +1514,7 @@ func TestDeleteWithDuplicateAttempts(t *testing.T) {
 
 // TestToPwritevSliceRaw tests the ToPwritevSliceRaw functionality
 func TestToPwritevSliceRaw(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Test empty skiplist
 	emptyBuffers := sl.ToPwritevSliceRaw()
@@ -1562,7 +1562,7 @@ func TestToPwritevSliceRaw(t *testing.T) {
 
 // TestToPwritevSliceRawWithPwritev tests ToPwritevSliceRaw with actual Pwritev system call
 func TestToPwritevSliceRawWithPwritev(t *testing.T) {
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 
 	// Insert test items in random order
 	items := []*TestItem{
@@ -1686,7 +1686,7 @@ func TestItemPtrMethods(t *testing.T) {
 	}
 
 	// Test with valid ItemPtr
-	sl := makeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
+	sl := MakeZeroCopySkiplist(16, getIntKey, getIntItemSize, cmpInt)
 	item := &TestItem{ID: 5, Name: "test"}
 	sl.Insert(item)
 

@@ -67,7 +67,7 @@ type ZeroCopySkiplist[T any, K comparable] struct {
 //     1 if the first key should be ordered after the second key
 //
 // Returns a new ZeroCopySkiplist ready for use.
-func makeZeroCopySkiplist[T any, K comparable](
+func MakeZeroCopySkiplist[T any, K comparable](
 	maxLevel int,
 	getKeyFromItem func(*T) K,
 	getItemSize func(*T) int,
@@ -456,7 +456,7 @@ func (sl *ZeroCopySkiplist[T, K]) Copy() *ZeroCopySkiplist[T, K] {
 	defer sl.mu.RUnlock()
 
 	// Create new skiplist with same configuration
-	newSl := makeZeroCopySkiplist(sl.maxLevel, sl.getKeyFromItem, sl.getItemSize, sl.cmpKey)
+	newSl := MakeZeroCopySkiplist(sl.maxLevel, sl.getKeyFromItem, sl.getItemSize, sl.cmpKey)
 
 	// If original is empty, return empty copy
 	if sl.length == 0 {
