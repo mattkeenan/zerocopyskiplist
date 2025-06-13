@@ -67,7 +67,7 @@ type ZeroCopySkiplist[T any, K comparable] struct {
 //     1 if the first key should be ordered after the second key
 //
 // Returns a new ZeroCopySkiplist ready for use.
-func makeZeroCopySkiplist[T any, K comparable](
+func MakeZeroCopySkiplist[T any, K comparable](
 	maxLevel int,
 	getKeyFromItem func(*T) K,
 	getItemSize func(*T) int,
