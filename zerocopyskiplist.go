@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"unsafe"
 )
 
 // MergeStrategy defines how to handle conflicts during merge operations
@@ -61,6 +62,16 @@ func MakeZeroCopySkiplist[T any, K comparable, C any](
 		getItemSize:    getItemSize,
 		cmpKey:         cmpKey,
 	}
+}
+
+// makeZeroCopySkiplist creates a skiplist - always requires explicit context type parameter
+func makeZeroCopySkiplist[T any, K comparable, C any](
+	maxLevel int,
+	getKeyFromItem func(*T) K,
+	getItemSize func(*T) int,
+	cmpKey func(K, K) int,
+) *ZeroCopySkiplist[T, K, C] {
+	return MakeZeroCopySkiplist[T, K, C](maxLevel, getKeyFromItem, getItemSize, cmpKey)
 }
 
 // Insert adds an item to the skiplist with optional context
@@ -219,7 +230,7 @@ func (sl *ZeroCopySkiplist[T, K, C]) Copy() *ZeroCopySkiplist[T, K, C] {
 	sl.rw.RLock()
 	defer sl.rw.RUnlock()
 
-	newSL := MakeZeroCopySkiplist(sl.maxLevel, sl.getKeyFromItem, sl.getItemSize, sl.cmpKey)
+	newSL := MakeZeroCopySkiplist[T, K, C](sl.maxLevel, sl.getKeyFromItem, sl.getItemSize, sl.cmpKey)
 
 	current := sl.First()
 	for current != nil {
@@ -253,8 +264,9 @@ func (sl *ZeroCopySkiplist[T, K, C]) ToPwritevSliceRaw() [][]byte {
 	current := sl.First()
 	for current != nil {
 		size := sl.getItemSize(current.item)
-		ptr := (*byte)(current.item)
-		buffer := (*[1024 * 1024]byte)(ptr)[:size:size] // Arbitrary large size
+		// Fixed: Use unsafe.Pointer for proper type conversion
+		ptr := (*byte)(unsafe.Pointer(current.item))
+		buffer := (*[1024 * 1024]byte)(unsafe.Pointer(ptr))[:size:size] // Arbitrary large size
 		buffers = append(buffers, buffer)
 		current = current.Next()
 	}
@@ -287,11 +299,6 @@ func (sl *ZeroCopySkiplist[T, K, C]) Merge(other *ZeroCopySkiplist[T, K, C], str
 	}
 
 	return nil
-}
-
-// InsertWithoutContext adds an item without context (backward compatibility)
-func (sl *ZeroCopySkiplist[T, K, C]) InsertWithoutContext(item *T) bool {
-	return sl.Insert(item, nil)
 }
 
 // Item returns the pointer to the original data structure

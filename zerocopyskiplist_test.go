@@ -112,17 +112,17 @@ func TestInsertWithoutContext(t *testing.T) {
 
 	items := createTestItems(3)
 
-	// Test insert without context
+	// Test insert with explicit nil context
 	for i := 0; i < len(items); i++ {
 		if !skiplist.Insert(items[i], nil) {
-			t.Errorf("Insert without context should return true for new item %d", items[i].ID)
+			t.Errorf("Insert with nil context should return true for new item %d", items[i].ID)
 		}
 	}
 
-	// Test InsertWithoutContext method
+	// Test another insert with nil context
 	extraItem := &TestItem{ID: 10, Value: "extra", Data: []byte("extra")}
-	if !skiplist.InsertWithoutContext(extraItem) {
-		t.Error("InsertWithoutContext should return true for new item")
+	if !skiplist.Insert(extraItem, nil) {
+		t.Error("Insert with nil context should return true for new item")
 	}
 
 	if skiplist.Length() != 4 {
