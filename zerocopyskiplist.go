@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"syscall"
 	"unsafe"
 )
 
@@ -19,17 +20,17 @@ const (
 )
 
 // ItemPtr represents a node in the skiplist with context support
-type ItemPtr[T any, K comparable, C any] struct {
+type ItemPtr[T any, K comparable, C comparable] struct {
 	item     *T
 	key      K
-	context  *C // New context field - pointer to generic type C
+	context  *C
 	forward  []*ItemPtr[T, K, C]
 	backward *ItemPtr[T, K, C]
 	level    int
 }
 
 // ZeroCopySkiplist is the main skiplist structure with context support
-type ZeroCopySkiplist[T any, K comparable, C any] struct {
+type ZeroCopySkiplist[T any, K comparable, C comparable] struct {
 	header         *ItemPtr[T, K, C]
 	maxLevel       int
 	level          int
@@ -41,7 +42,7 @@ type ZeroCopySkiplist[T any, K comparable, C any] struct {
 }
 
 // MakeZeroCopySkiplist creates a new skiplist with context support
-func MakeZeroCopySkiplist[T any, K comparable, C any](
+func MakeZeroCopySkiplist[T any, K comparable, C comparable](
 	maxLevel int,
 	getKeyFromItem func(*T) K,
 	getItemSize func(*T) int,
@@ -65,7 +66,7 @@ func MakeZeroCopySkiplist[T any, K comparable, C any](
 }
 
 // makeZeroCopySkiplist creates a skiplist - always requires explicit context type parameter
-func makeZeroCopySkiplist[T any, K comparable, C any](
+func makeZeroCopySkiplist[T any, K comparable, C comparable](
 	maxLevel int,
 	getKeyFromItem func(*T) K,
 	getItemSize func(*T) int,
@@ -241,36 +242,67 @@ func (sl *ZeroCopySkiplist[T, K, C]) Copy() *ZeroCopySkiplist[T, K, C] {
 	return newSL
 }
 
-// ToPwritevSlice generates byte slices for Pwritev() with custom serialization
-func (sl *ZeroCopySkiplist[T, K, C]) ToPwritevSlice(getItemBytes func(*T) []byte) [][]byte {
+// ToIovecSlice generates Iovec slices for vectorio.WritevRaw
+func (sl *ZeroCopySkiplist[T, K, C]) ToIovecSlice() []syscall.Iovec {
 	sl.rw.RLock()
 	defer sl.rw.RUnlock()
 
-	var buffers [][]byte
+	iovecs := make([]syscall.Iovec, 0, sl.length)
+
 	current := sl.First()
 	for current != nil {
-		buffers = append(buffers, getItemBytes(current.item))
+		iovec := syscall.Iovec{
+			Base: (*byte)(unsafe.Pointer(current.item)),
+			Len:  uint64(sl.getItemSize(current.item)),
+		}
+		iovecs = append(iovecs, iovec)
 		current = current.Next()
 	}
-	return buffers
+	return iovecs
 }
 
-// ToPwritevSliceRaw generates byte slices using built-in item size function
-func (sl *ZeroCopySkiplist[T, K, C]) ToPwritevSliceRaw() [][]byte {
+// ToContextIovecSlice generates Iovec slices for vectorio.WritevRaw
+// that match the context
+func (sl *ZeroCopySkiplist[T, K, C]) ToContextIovecSlice(context C) []syscall.Iovec {
 	sl.rw.RLock()
 	defer sl.rw.RUnlock()
 
-	var buffers [][]byte
+	iovecs := make([]syscall.Iovec, 0, sl.length/2)
+
 	current := sl.First()
 	for current != nil {
-		size := sl.getItemSize(current.item)
-		// Fixed: Use unsafe.Pointer for proper type conversion
-		ptr := (*byte)(unsafe.Pointer(current.item))
-		buffer := (*[1024 * 1024]byte)(unsafe.Pointer(ptr))[:size:size] // Arbitrary large size
-		buffers = append(buffers, buffer)
+		if current.context != nil && *current.context == context {
+			iovec := syscall.Iovec{
+				Base: (*byte)(unsafe.Pointer(current.item)),
+				Len:  uint64(sl.getItemSize(current.item)),
+			}
+			iovecs = append(iovecs, iovec)
+		}
 		current = current.Next()
 	}
-	return buffers
+	return iovecs
+}
+
+// ToNotContextIovecSlice generates Iovec slices for vectorio.WritevRaw
+// that don't match the context
+func (sl *ZeroCopySkiplist[T, K, C]) ToNotContextIovecSlice(context C) []syscall.Iovec {
+	sl.rw.RLock()
+	defer sl.rw.RUnlock()
+
+	iovecs := make([]syscall.Iovec, 0, sl.length/2)
+
+	current := sl.First()
+	for current != nil {
+		if current.context == nil || *current.context != context {
+			iovec := syscall.Iovec{
+				Base: (*byte)(unsafe.Pointer(current.item)),
+				Len:  uint64(sl.getItemSize(current.item)),
+			}
+			iovecs = append(iovecs, iovec)
+		}
+		current = current.Next()
+	}
+	return iovecs
 }
 
 // Merge merges another skiplist into this one with conflict resolution

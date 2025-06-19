@@ -2,12 +2,34 @@ package zerocopyskiplist
 
 import (
 	"fmt"
-	"math/rand"
+	"os"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/google/vectorio"
 )
+
+// writevChunked writes iovecs in chunks to avoid IOV_MAX limits
+func writevChunked(fd uintptr, iovecs []syscall.Iovec, chunkSize int) (int, error) {
+	totalWritten := 0
+	for i := 0; i < len(iovecs); i += chunkSize {
+		end := i + chunkSize
+		if end > len(iovecs) {
+			end = len(iovecs)
+		}
+
+		chunk := iovecs[i:end]
+		written, err := vectorio.WritevRaw(fd, chunk)
+		if err != nil {
+			return totalWritten, err
+		}
+		totalWritten += written
+	}
+	return totalWritten, nil
+}
 
 // Test data structures
 type TestItem struct {
@@ -20,7 +42,7 @@ type TestContext struct {
 	Timestamp   int64
 	AccessCount int
 	IsCached    bool
-	Metadata    map[string]interface{}
+	MetadataKey string // Changed from map to simple string to make comparable
 }
 
 // Helper functions
@@ -61,7 +83,7 @@ func createTestContexts(count int) []*TestContext {
 			Timestamp:   time.Now().Unix() + int64(i),
 			AccessCount: i,
 			IsCached:    i%2 == 0,
-			Metadata:    map[string]interface{}{"index": i},
+			MetadataKey: fmt.Sprintf("key_%d", i), // Changed from map to string
 		}
 	}
 	return contexts
@@ -450,7 +472,9 @@ func TestCopy(t *testing.T) {
 	}
 }
 
-func TestToPwritevSlice(t *testing.T) {
+// NEW TESTS FOR IOVEC FUNCTIONALITY
+
+func TestToIovecSlice(t *testing.T) {
 	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
 		16,
 		getKeyFromTestItem,
@@ -465,38 +489,137 @@ func TestToPwritevSlice(t *testing.T) {
 		skiplist.Insert(items[i], contexts[i])
 	}
 
-	// Test custom serialization
-	buffers := skiplist.ToPwritevSlice(func(item *TestItem) []byte {
-		return []byte(fmt.Sprintf("ID:%d,Value:%s", item.ID, item.Value))
-	})
+	iovecs := skiplist.ToIovecSlice()
 
-	if len(buffers) != 3 {
-		t.Errorf("Expected 3 buffers, got %d", len(buffers))
+	if len(iovecs) != 3 {
+		t.Errorf("Expected 3 iovecs, got %d", len(iovecs))
 	}
 
-	expectedData := []string{
-		"ID:1,Value:value_1",
-		"ID:2,Value:value_2",
-		"ID:3,Value:value_3",
-	}
-
-	for i, buffer := range buffers {
-		if string(buffer) != expectedData[i] {
-			t.Errorf("Buffer %d: expected %s, got %s", i, expectedData[i], string(buffer))
+	// Verify iovecs point to correct data
+	current := skiplist.First()
+	for i, iovec := range iovecs {
+		if current == nil {
+			t.Fatalf("Not enough items in skiplist for iovec %d", i)
 		}
-	}
 
-	// Test raw serialization
-	rawBuffers := skiplist.ToPwritevSliceRaw()
-	if len(rawBuffers) != 3 {
-		t.Errorf("Expected 3 raw buffers, got %d", len(rawBuffers))
-	}
-
-	for i, buffer := range rawBuffers {
-		expectedSize := getTestItemSize(items[i])
-		if len(buffer) != expectedSize {
-			t.Errorf("Raw buffer %d: expected size %d, got %d", i, expectedSize, len(buffer))
+		expectedBase := (*byte)(unsafe.Pointer(current.Item()))
+		if iovec.Base != expectedBase {
+			t.Errorf("Iovec %d has wrong base pointer", i)
 		}
+
+		expectedLen := uint64(getTestItemSize(current.Item()))
+		if iovec.Len != expectedLen {
+			t.Errorf("Iovec %d has wrong length: expected %d, got %d", i, expectedLen, iovec.Len)
+		}
+
+		current = current.Next()
+	}
+}
+
+func TestToContextIovecSlice(t *testing.T) {
+	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
+		16,
+		getKeyFromTestItem,
+		getTestItemSize,
+		compareInt,
+	)
+
+	items := createTestItems(4)
+	contexts := createTestContexts(4)
+
+	// Create a specific context to search for
+	targetContext := &TestContext{
+		Timestamp:   999999,
+		AccessCount: 100,
+		IsCached:    true,
+	}
+
+	// Insert items - some with target context, some without
+	skiplist.Insert(items[0], contexts[0])   // different context
+	skiplist.Insert(items[1], targetContext) // target context
+	skiplist.Insert(items[2], contexts[2])   // different context
+	skiplist.Insert(items[3], targetContext) // target context
+
+	iovecs := skiplist.ToContextIovecSlice(*targetContext)
+
+	// Should find 2 items with target context
+	expectedCount := 2
+	if len(iovecs) != expectedCount {
+		t.Errorf("Expected %d iovecs with target context, got %d", expectedCount, len(iovecs))
+	}
+
+	// Verify the iovecs correspond to items with target context
+	current := skiplist.First()
+	iovecIndex := 0
+	for current != nil {
+		if current.Context() != nil && *current.Context() == *targetContext {
+			if iovecIndex >= len(iovecs) {
+				t.Error("Not enough iovecs for matching contexts")
+				break
+			}
+
+			expectedBase := (*byte)(unsafe.Pointer(current.Item()))
+			if iovecs[iovecIndex].Base != expectedBase {
+				t.Errorf("Context iovec %d has wrong base pointer", iovecIndex)
+			}
+
+			iovecIndex++
+		}
+		current = current.Next()
+	}
+}
+
+func TestToNotContextIovecSlice(t *testing.T) {
+	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
+		16,
+		getKeyFromTestItem,
+		getTestItemSize,
+		compareInt,
+	)
+
+	items := createTestItems(4)
+	contexts := createTestContexts(4)
+
+	// Create a specific context to exclude
+	excludeContext := &TestContext{
+		Timestamp:   999999,
+		AccessCount: 100,
+		IsCached:    true,
+	}
+
+	// Insert items - some with exclude context, some without
+	skiplist.Insert(items[0], contexts[0])    // different context
+	skiplist.Insert(items[1], excludeContext) // exclude context
+	skiplist.Insert(items[2], contexts[2])    // different context
+	skiplist.Insert(items[3], excludeContext) // exclude context
+
+	iovecs := skiplist.ToNotContextIovecSlice(*excludeContext)
+
+	// Should find 2 items not matching exclude context
+	expectedCount := 2
+	if len(iovecs) != expectedCount {
+		t.Errorf("Expected %d iovecs not matching exclude context, got %d", expectedCount, len(iovecs))
+	}
+
+	// Verify the iovecs correspond to items not matching exclude context
+	current := skiplist.First()
+	iovecIndex := 0
+	for current != nil {
+		contextMatches := current.Context() != nil && *current.Context() == *excludeContext
+		if !contextMatches {
+			if iovecIndex >= len(iovecs) {
+				t.Error("Not enough iovecs for non-matching contexts")
+				break
+			}
+
+			expectedBase := (*byte)(unsafe.Pointer(current.Item()))
+			if iovecs[iovecIndex].Base != expectedBase {
+				t.Errorf("Not-context iovec %d has wrong base pointer", iovecIndex)
+			}
+
+			iovecIndex++
+		}
+		current = current.Next()
 	}
 }
 
@@ -597,43 +720,73 @@ func TestLargeDataset(t *testing.T) {
 		t.Skip("Skipping large dataset test in short mode")
 	}
 
-	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
-		20,
+	// Determine temp directory - use TMPDIR env var if set, otherwise /tmp
+	tempDir := os.Getenv("TMPDIR")
+	if tempDir == "" {
+		tempDir = "/tmp"
+	}
+	t.Logf("Using temp directory: %s", tempDir)
+
+	// Use string contexts instead of TestContext struct
+	skiplist := MakeZeroCopySkiplist[TestItem, int, string](
+		24, // Increased for larger dataset
 		getKeyFromTestItem,
 		getTestItemSize,
 		compareInt,
 	)
 
-	const numItems = 10000
-	items := make([]*TestItem, numItems)
-	contexts := make([]*TestContext, numItems)
+	const numItems = 1000000
+	const numDeletes = 300000
 
-	// Create items in random order
+	// Define 5 string contexts
+	stringContexts := []string{
+		"cache_hot",
+		"cache_warm",
+		"cache_cold",
+		"no_cache",
+		"cache_dirty",
+	}
+
+	items := make([]*TestItem, numItems)
+	contexts := make([]*string, numItems)
+
+	// Create deterministic dataset
 	for i := 0; i < numItems; i++ {
 		items[i] = &TestItem{
 			ID:    i + 1,
 			Value: fmt.Sprintf("large_value_%d", i+1),
-			Data:  make([]byte, 100), // Larger data
+			Data:  make([]byte, 64), // Fixed size for consistency
 		}
-		contexts[i] = &TestContext{
-			Timestamp:   time.Now().Unix() + int64(i),
-			AccessCount: rand.Intn(1000),
-			IsCached:    rand.Float32() < 0.5,
+		// Fill data with deterministic pattern
+		for j := range items[i].Data {
+			items[i].Data[j] = byte((i + j) % 256)
 		}
+
+		// Assign context deterministically - cycle through the 5 contexts
+		contextIndex := i % len(stringContexts)
+		contexts[i] = &stringContexts[contextIndex]
 	}
 
-	// Shuffle for random insertion order
-	rand.Seed(time.Now().UnixNano())
-	for i := range items {
-		j := rand.Intn(i + 1)
-		items[i], items[j] = items[j], items[i]
-		contexts[i], contexts[j] = contexts[j], contexts[i]
+	// Create deterministic insertion order (reverse order for worst-case scenario)
+	insertOrder := make([]*TestItem, numItems)
+	insertContexts := make([]*string, numItems)
+	for i := 0; i < numItems; i++ {
+		insertOrder[i] = items[numItems-1-i] // Reverse order
+		insertContexts[i] = contexts[numItems-1-i]
 	}
 
 	// Insert all items
+	t.Logf("Inserting %d items in reverse order...", numItems)
 	start := time.Now()
 	for i := 0; i < numItems; i++ {
-		skiplist.Insert(items[i], contexts[i])
+		skiplist.Insert(insertOrder[i], insertContexts[i])
+
+		// Progress indicator for long operation
+		if (i+1)%100000 == 0 {
+			elapsed := time.Since(start)
+			rate := float64(i+1) / elapsed.Seconds()
+			t.Logf("  Inserted %d items (%.0f items/sec)", i+1, rate)
+		}
 	}
 	insertTime := time.Since(start)
 
@@ -641,13 +794,18 @@ func TestLargeDataset(t *testing.T) {
 		t.Errorf("Expected length %d, got %d", numItems, skiplist.Length())
 	}
 
-	// Test search performance
-	start = time.Now()
-	searchKeys := make([]int, 1000)
+	// Test search performance with deterministic keys
+	t.Logf("Testing search performance...")
+	searchKeys := make([]int, 10000)
 	for i := range searchKeys {
-		searchKeys[i] = rand.Intn(numItems) + 1
+		// Deterministic search pattern: every 100th item
+		searchKeys[i] = (i * 100) + 1
+		if searchKeys[i] > numItems {
+			searchKeys[i] = (i % numItems) + 1
+		}
 	}
 
+	start = time.Now()
 	for _, key := range searchKeys {
 		found, ctx := skiplist.Find(key)
 		if found == nil || ctx == nil {
@@ -656,11 +814,209 @@ func TestLargeDataset(t *testing.T) {
 	}
 	searchTime := time.Since(start)
 
-	t.Logf("Large dataset test completed:")
-	t.Logf("  Items: %d", numItems)
-	t.Logf("  Insert time: %v", insertTime)
-	t.Logf("  Search time for 1000 queries: %v", searchTime)
-	t.Logf("  Average search time: %v", searchTime/1000)
+	// Test all three iovec functions and write to disk using WritevRaw
+	t.Logf("Testing iovec generation and disk writes...")
+
+	// 1. Test ToIovecSlice (all items)
+	start = time.Now()
+	allIovecs := skiplist.ToIovecSlice()
+	allIovecTime := time.Since(start)
+
+	if len(allIovecs) != numItems {
+		t.Errorf("Expected %d iovecs, got %d", numItems, len(allIovecs))
+	}
+
+	// Write all items to disk using WritevRaw
+	allFile, err := os.CreateTemp(tempDir, "skiplist_all_*.bin")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(allFile.Name())
+	defer allFile.Close()
+
+	start = time.Now()
+	allBytesWritten, err := writevChunked(allFile.Fd(), allIovecs, 1024)
+	if err != nil {
+		t.Fatalf("Failed to write all items: %v", err)
+	}
+	allWriteTime := time.Since(start)
+
+	// 2. Test ToContextIovecSlice (items matching "cache_hot")
+	targetContext := "cache_hot"
+	start = time.Now()
+	contextIovecs := skiplist.ToContextIovecSlice(targetContext)
+	contextIovecTime := time.Since(start)
+
+	expectedContextItems := numItems / len(stringContexts) // Should be 1/5 of items
+	if len(contextIovecs) < expectedContextItems-1000 || len(contextIovecs) > expectedContextItems+1000 {
+		t.Errorf("Expected ~%d context iovecs, got %d", expectedContextItems, len(contextIovecs))
+	}
+
+	// Write context-matching items to disk using WritevRaw
+	contextFile, err := os.CreateTemp(tempDir, "skiplist_context_*.bin")
+	if err != nil {
+		t.Fatalf("Failed to create context temp file: %v", err)
+	}
+	defer os.Remove(contextFile.Name())
+	defer contextFile.Close()
+
+	start = time.Now()
+	contextBytesWritten, err := writevChunked(contextFile.Fd(), contextIovecs, 1024)
+	if err != nil {
+		t.Fatalf("Failed to write context items: %v", err)
+	}
+	contextWriteTime := time.Since(start)
+
+	// 3. Test ToNotContextIovecSlice (items not matching "cache_hot")
+	start = time.Now()
+	notContextIovecs := skiplist.ToNotContextIovecSlice(targetContext)
+	notContextIovecTime := time.Since(start)
+
+	expectedNotContextItems := numItems - expectedContextItems // Should be 4/5 of items
+	if len(notContextIovecs) < expectedNotContextItems-1000 || len(notContextIovecs) > expectedNotContextItems+1000 {
+		t.Errorf("Expected ~%d not-context iovecs, got %d", expectedNotContextItems, len(notContextIovecs))
+	}
+
+	// Write non-context-matching items to disk using WritevRaw
+	notContextFile, err := os.CreateTemp(tempDir, "skiplist_not_context_*.bin")
+	if err != nil {
+		t.Fatalf("Failed to create not-context temp file: %v", err)
+	}
+	defer os.Remove(notContextFile.Name())
+	defer notContextFile.Close()
+
+	start = time.Now()
+	notContextBytesWritten, err := writevChunked(notContextFile.Fd(), notContextIovecs, 1024)
+	if err != nil {
+		t.Fatalf("Failed to write not-context items: %v", err)
+	}
+	notContextWriteTime := time.Since(start)
+
+	// Verify the counts add up
+	if len(contextIovecs)+len(notContextIovecs) != numItems {
+		t.Errorf("Context + not-context items (%d + %d) should equal total items %d",
+			len(contextIovecs), len(notContextIovecs), numItems)
+	}
+
+	// Delete deterministic set of items (every 3rd item starting from index 2)
+	t.Logf("Deleting %d items...", numDeletes)
+	deleteKeys := make([]int, numDeletes)
+	for i := 0; i < numDeletes; i++ {
+		deleteKeys[i] = (i * 3) + 3 // Every 3rd item: 3, 6, 9, 12, ...
+	}
+
+	start = time.Now()
+	deletedCount := 0
+	for i, key := range deleteKeys {
+		if skiplist.Delete(key) {
+			deletedCount++
+		}
+
+		// Progress indicator for long operation
+		if (i+1)%50000 == 0 {
+			elapsed := time.Since(start)
+			rate := float64(i+1) / elapsed.Seconds()
+			t.Logf("  Processed %d deletions (%.0f ops/sec)", i+1, rate)
+		}
+	}
+	deleteTime := time.Since(start)
+
+	expectedFinalLength := numItems - deletedCount
+	if skiplist.Length() != expectedFinalLength {
+		t.Errorf("Expected final length %d, got %d", expectedFinalLength, skiplist.Length())
+	}
+
+	// Verify deletions worked by searching for deleted items
+	t.Logf("Verifying deletions...")
+	start = time.Now()
+	for i := 0; i < 1000; i++ { // Check first 1000 deleted items
+		key := deleteKeys[i]
+		found, _ := skiplist.Find(key)
+		if found != nil {
+			t.Errorf("Item %d should have been deleted but was found", key)
+		}
+	}
+	verifyTime := time.Since(start)
+
+	// Test navigation after deletions
+	t.Logf("Testing navigation after deletions...")
+	start = time.Now()
+	current := skiplist.First()
+	navigationCount := 0
+	for current != nil && navigationCount < 10000 { // Navigate first 10k items
+		_ = current.Item()
+		_ = current.Context()
+		current = current.Next()
+		navigationCount++
+	}
+	navigationTime := time.Since(start)
+
+	// Final iovec test after deletions - write remaining items to disk
+	start = time.Now()
+	finalIovecs := skiplist.ToIovecSlice()
+	finalIovecTime := time.Since(start)
+
+	if len(finalIovecs) != expectedFinalLength {
+		t.Errorf("Expected %d final iovecs, got %d", expectedFinalLength, len(finalIovecs))
+	}
+
+	// Write final state to disk using WritevRaw
+	finalFile, err := os.CreateTemp(tempDir, "skiplist_final_*.bin")
+	if err != nil {
+		t.Fatalf("Failed to create final temp file: %v", err)
+	}
+	defer os.Remove(finalFile.Name())
+	defer finalFile.Close()
+
+	start = time.Now()
+	finalBytesWritten, err := writevChunked(finalFile.Fd(), finalIovecs, 1024)
+	if err != nil {
+		t.Fatalf("Failed to write final items: %v", err)
+	}
+	finalWriteTime := time.Since(start)
+
+	// Performance summary
+	t.Logf("\n=== Large Dataset Test Results ===")
+	t.Logf("Dataset: %d items, %d deletions", numItems, numDeletes)
+	t.Logf("String contexts: %v", stringContexts)
+	t.Logf("Final size: %d items", skiplist.Length())
+
+	t.Logf("\nPerformance Metrics:")
+	t.Logf("  Insert time: %v (%.0f items/sec)", insertTime, float64(numItems)/insertTime.Seconds())
+	t.Logf("  Search time (10k queries): %v (%.0f searches/sec)", searchTime, float64(len(searchKeys))/searchTime.Seconds())
+	t.Logf("  Delete time: %v (%.0f deletions/sec)", deleteTime, float64(len(deleteKeys))/deleteTime.Seconds())
+	t.Logf("  Verify time (1k checks): %v", verifyTime)
+	t.Logf("  Navigation time (10k items): %v", navigationTime)
+
+	t.Logf("\nIovec Generation Times:")
+	t.Logf("  All items iovec: %v (%d items)", allIovecTime, len(allIovecs))
+	t.Logf("  Context='%s' iovec: %v (%d items)", targetContext, contextIovecTime, len(contextIovecs))
+	t.Logf("  Not-context='%s' iovec: %v (%d items)", targetContext, notContextIovecTime, len(notContextIovecs))
+	t.Logf("  Final state iovec: %v (%d items)", finalIovecTime, len(finalIovecs))
+
+	t.Logf("\nDisk Write Performance:")
+	t.Logf("  All items write: %v (%d bytes, %.1f MB/s)",
+		allWriteTime, allBytesWritten, float64(allBytesWritten)/(1024*1024)/allWriteTime.Seconds())
+	t.Logf("  Context items write: %v (%d bytes, %.1f MB/s)",
+		contextWriteTime, contextBytesWritten, float64(contextBytesWritten)/(1024*1024)/contextWriteTime.Seconds())
+	t.Logf("  Not-context items write: %v (%d bytes, %.1f MB/s)",
+		notContextWriteTime, notContextBytesWritten, float64(notContextBytesWritten)/(1024*1024)/notContextWriteTime.Seconds())
+	t.Logf("  Final state write: %v (%d bytes, %.1f MB/s)",
+		finalWriteTime, finalBytesWritten, float64(finalBytesWritten)/(1024*1024)/finalWriteTime.Seconds())
+
+	avgSearchTime := searchTime / time.Duration(len(searchKeys))
+	avgDeleteTime := deleteTime / time.Duration(len(deleteKeys))
+	t.Logf("\nAverage Operation Times:")
+	t.Logf("  Average search: %v", avgSearchTime)
+	t.Logf("  Average delete: %v", avgDeleteTime)
+
+	// Calculate total data written
+	totalBytesWritten := allBytesWritten + contextBytesWritten + notContextBytesWritten + finalBytesWritten
+	totalWriteTime := allWriteTime + contextWriteTime + notContextWriteTime + finalWriteTime
+	t.Logf("\nTotal Disk I/O:")
+	t.Logf("  Total bytes written: %d (%.1f MB)", totalBytesWritten, float64(totalBytesWritten)/(1024*1024))
+	t.Logf("  Total write time: %v", totalWriteTime)
+	t.Logf("  Overall write throughput: %.1f MB/s", float64(totalBytesWritten)/(1024*1024)/totalWriteTime.Seconds())
 }
 
 func TestConcurrency(t *testing.T) {
@@ -753,6 +1109,23 @@ func TestEdgeCases(t *testing.T) {
 
 	if skiplist.Delete(1) {
 		t.Error("Delete() on empty skiplist should return false")
+	}
+
+	// Test iovec operations on empty skiplist
+	iovecs := skiplist.ToIovecSlice()
+	if len(iovecs) != 0 {
+		t.Error("ToIovecSlice() on empty skiplist should return empty slice")
+	}
+
+	testContext := TestContext{AccessCount: 1}
+	contextIovecs := skiplist.ToContextIovecSlice(testContext)
+	if len(contextIovecs) != 0 {
+		t.Error("ToContextIovecSlice() on empty skiplist should return empty slice")
+	}
+
+	notContextIovecs := skiplist.ToNotContextIovecSlice(testContext)
+	if len(notContextIovecs) != 0 {
+		t.Error("ToNotContextIovecSlice() on empty skiplist should return empty slice")
 	}
 
 	// Insert single item
@@ -876,5 +1249,26 @@ func BenchmarkTraversal(b *testing.B) {
 			_ = current.Context()
 			current = current.Next()
 		}
+	}
+}
+
+func BenchmarkToIovecSlice(b *testing.B) {
+	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
+		16,
+		getKeyFromTestItem,
+		getTestItemSize,
+		compareInt,
+	)
+
+	// Pre-populate
+	for i := 0; i < 1000; i++ {
+		item := &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
+		context := &TestContext{AccessCount: i}
+		skiplist.Insert(item, context)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = skiplist.ToIovecSlice()
 	}
 }
