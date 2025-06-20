@@ -242,67 +242,55 @@ func (sl *ZeroCopySkiplist[T, K, C]) Copy() *ZeroCopySkiplist[T, K, C] {
 	return newSL
 }
 
-// ToIovecSlice generates Iovec slices for vectorio.WritevRaw
-func (sl *ZeroCopySkiplist[T, K, C]) ToIovecSlice() []syscall.Iovec {
+// CallbackToIovecSlice generates Iovec slices for items that match the callback filter
+func (sl *ZeroCopySkiplist[T, K, C]) CallbackToIovecSlice(callback func(*ItemPtr[T, K, C]) bool) []syscall.Iovec {
 	sl.rw.RLock()
 	defer sl.rw.RUnlock()
 
-	iovecs := make([]syscall.Iovec, 0, sl.length)
+	iovecs := make([]syscall.Iovec, 0, sl.length/2)
 
 	current := sl.First()
 	for current != nil {
-		iovec := syscall.Iovec{
-			Base: (*byte)(unsafe.Pointer(current.item)),
-			Len:  uint64(sl.getItemSize(current.item)),
+		// Save current.Next() in case the user wants to do something crazy like delete current
+		tmp := current.Next()
+		if callback(current) { // Fixed: removed negation and pass current directly (not &current)
+			iovec := syscall.Iovec{
+				Base: (*byte)(unsafe.Pointer(current.item)),
+				Len:  uint64(sl.getItemSize(current.item)),
+			}
+			iovecs = append(iovecs, iovec)
 		}
-		iovecs = append(iovecs, iovec)
-		current = current.Next()
+		current = tmp
 	}
 	return iovecs
 }
 
-// ToContextIovecSlice generates Iovec slices for vectorio.WritevRaw
-// that match the context
+// ToIovecSlice generates Iovec slices for all items (ignoring context parameter for backward compatibility)
+func (sl *ZeroCopySkiplist[T, K, C]) ToIovecSlice(context C) []syscall.Iovec {
+	// Note: context parameter is ignored to maintain backward compatibility with existing ToIovecSlice() calls
+	return sl.CallbackToIovecSlice(func(item *ItemPtr[T, K, C]) bool {
+		return true // Include all items
+	})
+}
+
+// ToContextIovecSlice generates Iovec slices for items that match the context
 func (sl *ZeroCopySkiplist[T, K, C]) ToContextIovecSlice(context C) []syscall.Iovec {
-	sl.rw.RLock()
-	defer sl.rw.RUnlock()
-
-	iovecs := make([]syscall.Iovec, 0, sl.length/2)
-
-	current := sl.First()
-	for current != nil {
-		if current.context != nil && *current.context == context {
-			iovec := syscall.Iovec{
-				Base: (*byte)(unsafe.Pointer(current.item)),
-				Len:  uint64(sl.getItemSize(current.item)),
-			}
-			iovecs = append(iovecs, iovec)
+	return sl.CallbackToIovecSlice(func(item *ItemPtr[T, K, C]) bool {
+		if item.context != nil && *item.context == context {
+			return true
 		}
-		current = current.Next()
-	}
-	return iovecs
+		return false
+	})
 }
 
-// ToNotContextIovecSlice generates Iovec slices for vectorio.WritevRaw
-// that don't match the context
+// ToNotContextIovecSlice generates Iovec slices for items that don't match the context
 func (sl *ZeroCopySkiplist[T, K, C]) ToNotContextIovecSlice(context C) []syscall.Iovec {
-	sl.rw.RLock()
-	defer sl.rw.RUnlock()
-
-	iovecs := make([]syscall.Iovec, 0, sl.length/2)
-
-	current := sl.First()
-	for current != nil {
-		if current.context == nil || *current.context != context {
-			iovec := syscall.Iovec{
-				Base: (*byte)(unsafe.Pointer(current.item)),
-				Len:  uint64(sl.getItemSize(current.item)),
-			}
-			iovecs = append(iovecs, iovec)
+	return sl.CallbackToIovecSlice(func(item *ItemPtr[T, K, C]) bool {
+		if item.context == nil || *item.context != context {
+			return true
 		}
-		current = current.Next()
-	}
-	return iovecs
+		return false
+	})
 }
 
 // Merge merges another skiplist into this one with conflict resolution

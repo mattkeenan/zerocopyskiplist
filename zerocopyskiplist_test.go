@@ -472,7 +472,219 @@ func TestCopy(t *testing.T) {
 	}
 }
 
-// NEW TESTS FOR IOVEC FUNCTIONALITY
+// NEW TESTS FOR CALLBACK FUNCTIONALITY
+
+func TestCallbackToIovecSlice(t *testing.T) {
+	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
+		16,
+		getKeyFromTestItem,
+		getTestItemSize,
+		compareInt,
+	)
+
+	// Use 7 items (prime) for better test coverage
+	items := createTestItems(7)
+
+	// Create 3 distinct context types (prime, relatively prime to 7)
+	contextTypes := []TestContext{
+		{Timestamp: 1000, AccessCount: 10, IsCached: true, MetadataKey: "type_A"},  // Type A
+		{Timestamp: 2000, AccessCount: 20, IsCached: false, MetadataKey: "type_B"}, // Type B
+		{Timestamp: 3000, AccessCount: 30, IsCached: true, MetadataKey: "type_C"},  // Type C
+	}
+
+	// Distribute contexts cyclically across 7 items
+	// Item ID -> Context mapping:
+	// ID=1 -> contextTypes[0] (type_A, cached=true)
+	// ID=2 -> contextTypes[1] (type_B, cached=false)
+	// ID=3 -> contextTypes[2] (type_C, cached=true)
+	// ID=4 -> contextTypes[0] (type_A, cached=true)
+	// ID=5 -> contextTypes[1] (type_B, cached=false)
+	// ID=6 -> contextTypes[2] (type_C, cached=true)
+	// ID=7 -> contextTypes[0] (type_A, cached=true)
+	for i := 0; i < len(items); i++ {
+		contextIndex := i % 3
+		skiplist.Insert(items[i], &contextTypes[contextIndex])
+	}
+
+	t.Logf("Distribution analysis:")
+	t.Logf("  Total items: 7 (prime)")
+	t.Logf("  Context types: 3 (prime, relatively prime to 7)")
+	t.Logf("  Type A (cached): IDs 1,4,7 (3 items)")
+	t.Logf("  Type B (not cached): IDs 2,5 (2 items)")
+	t.Logf("  Type C (cached): IDs 3,6 (2 items)")
+	t.Logf("  Odd IDs: 1,3,5,7 (4 items)")
+	t.Logf("  Even IDs: 2,4,6 (3 items)")
+
+	// Test 1: Include all items (should match ToIovecSlice behavior)
+	allIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		return true // Include all items
+	})
+
+	if len(allIovecs) != 7 {
+		t.Errorf("Expected 7 iovecs, got %d", len(allIovecs))
+	}
+
+	// Test 2: Include only even IDs (3 items: 2,4,6)
+	evenIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		return item.Key()%2 == 0
+	})
+
+	expectedEvenCount := 3 // IDs 2, 4, 6
+	if len(evenIovecs) != expectedEvenCount {
+		t.Errorf("Expected %d even iovecs, got %d", expectedEvenCount, len(evenIovecs))
+	}
+
+	// Test 3: Include only odd IDs (4 items: 1,3,5,7)
+	oddIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		return item.Key()%2 == 1
+	})
+
+	expectedOddCount := 4 // IDs 1, 3, 5, 7
+	if len(oddIovecs) != expectedOddCount {
+		t.Errorf("Expected %d odd iovecs, got %d", expectedOddCount, len(oddIovecs))
+	}
+
+	// Test 4: Include only cached items (5 items: 1,3,4,6,7)
+	cachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		ctx := item.Context()
+		return ctx != nil && ctx.IsCached
+	})
+
+	expectedCachedCount := 5 // Type A: 1,4,7 + Type C: 3,6 = 5 items
+	if len(cachedIovecs) != expectedCachedCount {
+		t.Errorf("Expected %d cached iovecs, got %d", expectedCachedCount, len(cachedIovecs))
+	}
+
+	// Test 5: Include items with type_A context (3 items: 1,4,7)
+	typeAIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		ctx := item.Context()
+		return ctx != nil && ctx.MetadataKey == "type_A"
+	})
+
+	expectedTypeACount := 3 // IDs 1, 4, 7
+	if len(typeAIovecs) != expectedTypeACount {
+		t.Errorf("Expected %d type_A iovecs, got %d", expectedTypeACount, len(typeAIovecs))
+	}
+
+	// Test 6: Complex filter - even IDs AND cached (2 items: 4,6)
+	evenCachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		ctx := item.Context()
+		return item.Key()%2 == 0 && ctx != nil && ctx.IsCached
+	})
+
+	// Analysis: Even IDs (2,4,6) - only 4,6 are cached (2 is type_B which is not cached)
+	expectedEvenCachedCount := 2 // IDs 4, 6
+	if len(evenCachedIovecs) != expectedEvenCachedCount {
+		t.Errorf("Expected %d even+cached iovecs, got %d", expectedEvenCachedCount, len(evenCachedIovecs))
+	}
+
+	// Test 7: Complex filter - odd IDs AND type_A (2 items: 1,7)
+	oddTypeAIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		ctx := item.Context()
+		return item.Key()%2 == 1 && ctx != nil && ctx.MetadataKey == "type_A"
+	})
+
+	expectedOddTypeACount := 2 // IDs 1, 7 (both odd and type_A)
+	if len(oddTypeAIovecs) != expectedOddTypeACount {
+		t.Errorf("Expected %d odd+type_A iovecs, got %d", expectedOddTypeACount, len(oddTypeAIovecs))
+	}
+
+	// Test 8: Complex filter - high access count AND not cached (2 items: 2,5)
+	highAccessNotCachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		ctx := item.Context()
+		return ctx != nil && ctx.AccessCount >= 20 && !ctx.IsCached
+	})
+
+	expectedHighAccessNotCachedCount := 2 // Type B items (IDs 2,5) have AccessCount=20 and are not cached
+	if len(highAccessNotCachedIovecs) != expectedHighAccessNotCachedCount {
+		t.Errorf("Expected %d high access + not cached iovecs, got %d", expectedHighAccessNotCachedCount, len(highAccessNotCachedIovecs))
+	}
+
+	// Test 9: Verify the distributions add up correctly
+	notCachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		ctx := item.Context()
+		return ctx != nil && !ctx.IsCached
+	})
+
+	if len(cachedIovecs)+len(notCachedIovecs) != 7 {
+		t.Errorf("Cached (%d) + not cached (%d) should equal total (7)", len(cachedIovecs), len(notCachedIovecs))
+	}
+
+	if len(evenIovecs)+len(oddIovecs) != 7 {
+		t.Errorf("Even (%d) + odd (%d) should equal total (7)", len(evenIovecs), len(oddIovecs))
+	}
+
+	// Test 10: Empty result
+	emptyIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		return false // Include nothing
+	})
+
+	if len(emptyIovecs) != 0 {
+		t.Errorf("Expected 0 empty iovecs, got %d", len(emptyIovecs))
+	}
+
+	// Test 11: Verify iovec pointers are correct for a sample filter
+	current := skiplist.First()
+	iovecIndex := 0
+	for current != nil {
+		if current.Key()%2 == 0 { // Even IDs
+			if iovecIndex >= len(evenIovecs) {
+				t.Error("Not enough iovecs for even items")
+				break
+			}
+
+			expectedBase := (*byte)(unsafe.Pointer(current.Item()))
+			if evenIovecs[iovecIndex].Base != expectedBase {
+				t.Errorf("Even iovec %d has wrong base pointer", iovecIndex)
+			}
+
+			expectedLen := uint64(getTestItemSize(current.Item()))
+			if evenIovecs[iovecIndex].Len != expectedLen {
+				t.Errorf("Even iovec %d has wrong length: expected %d, got %d", iovecIndex, expectedLen, evenIovecs[iovecIndex].Len)
+			}
+
+			iovecIndex++
+		}
+		current = current.Next()
+	}
+
+	t.Logf("All relatively prime distribution tests passed!")
+}
+
+func TestCallbackToIovecSliceWithDifferentTypes(t *testing.T) {
+	// Test with string context type
+	skiplist := MakeZeroCopySkiplist[TestItem, int, string](
+		16,
+		getKeyFromTestItem,
+		getTestItemSize,
+		compareInt,
+	)
+
+	items := createTestItems(3)
+	contexts := []string{"main", "branch-tmp", "branch-feature"}
+
+	for i, item := range items {
+		ctx := contexts[i]
+		skiplist.Insert(item, &ctx)
+	}
+
+	// Test branch context filter
+	branchIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, string]) bool {
+		ctx := item.Context()
+		if ctx != nil {
+			contextStr := *ctx
+			return contextStr == "branch-tmp" || contextStr == "branch-feature"
+		}
+		return false
+	})
+
+	expectedBranchCount := 2 // "branch-tmp" and "branch-feature"
+	if len(branchIovecs) != expectedBranchCount {
+		t.Errorf("Expected %d branch iovecs, got %d", expectedBranchCount, len(branchIovecs))
+	}
+}
+
+// UPDATED TESTS FOR IOVEC FUNCTIONALITY
 
 func TestToIovecSlice(t *testing.T) {
 	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
@@ -489,7 +701,9 @@ func TestToIovecSlice(t *testing.T) {
 		skiplist.Insert(items[i], contexts[i])
 	}
 
-	iovecs := skiplist.ToIovecSlice()
+	// Test ToIovecSlice with dummy context (it ignores the context parameter)
+	dummyContext := TestContext{AccessCount: 999}
+	iovecs := skiplist.ToIovecSlice(dummyContext)
 
 	if len(iovecs) != 3 {
 		t.Errorf("Expected 3 iovecs, got %d", len(iovecs))
@@ -817,9 +1031,10 @@ func TestLargeDataset(t *testing.T) {
 	// Test all three iovec functions and write to disk using WritevRaw
 	t.Logf("Testing iovec generation and disk writes...")
 
-	// 1. Test ToIovecSlice (all items)
+	// 1. Test ToIovecSlice (all items) - Updated to pass context parameter
 	start = time.Now()
-	allIovecs := skiplist.ToIovecSlice()
+	dummyContext := "dummy"
+	allIovecs := skiplist.ToIovecSlice(dummyContext)
 	allIovecTime := time.Since(start)
 
 	if len(allIovecs) != numItems {
@@ -892,6 +1107,17 @@ func TestLargeDataset(t *testing.T) {
 	}
 	notContextWriteTime := time.Since(start)
 
+	// 4. Test CallbackToIovecSlice with custom filter
+	start = time.Now()
+	customIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, string]) bool {
+		// Include items with ID divisible by 1000 and in "cache_hot" context
+		ctx := item.Context()
+		return item.Key()%1000 == 0 && ctx != nil && *ctx == "cache_hot"
+	})
+	customIovecTime := time.Since(start)
+
+	t.Logf("Custom filter found %d items (ID divisible by 1000 AND cache_hot)", len(customIovecs))
+
 	// Verify the counts add up
 	if len(contextIovecs)+len(notContextIovecs) != numItems {
 		t.Errorf("Context + not-context items (%d + %d) should equal total items %d",
@@ -953,7 +1179,7 @@ func TestLargeDataset(t *testing.T) {
 
 	// Final iovec test after deletions - write remaining items to disk
 	start = time.Now()
-	finalIovecs := skiplist.ToIovecSlice()
+	finalIovecs := skiplist.ToIovecSlice("final")
 	finalIovecTime := time.Since(start)
 
 	if len(finalIovecs) != expectedFinalLength {
@@ -992,6 +1218,7 @@ func TestLargeDataset(t *testing.T) {
 	t.Logf("  All items iovec: %v (%d items)", allIovecTime, len(allIovecs))
 	t.Logf("  Context='%s' iovec: %v (%d items)", targetContext, contextIovecTime, len(contextIovecs))
 	t.Logf("  Not-context='%s' iovec: %v (%d items)", targetContext, notContextIovecTime, len(notContextIovecs))
+	t.Logf("  Custom filter iovec: %v (%d items)", customIovecTime, len(customIovecs))
 	t.Logf("  Final state iovec: %v (%d items)", finalIovecTime, len(finalIovecs))
 
 	t.Logf("\nDisk Write Performance:")
@@ -1112,20 +1339,28 @@ func TestEdgeCases(t *testing.T) {
 	}
 
 	// Test iovec operations on empty skiplist
-	iovecs := skiplist.ToIovecSlice()
+	dummyContext := TestContext{AccessCount: 1}
+	iovecs := skiplist.ToIovecSlice(dummyContext)
 	if len(iovecs) != 0 {
 		t.Error("ToIovecSlice() on empty skiplist should return empty slice")
 	}
 
-	testContext := TestContext{AccessCount: 1}
-	contextIovecs := skiplist.ToContextIovecSlice(testContext)
+	contextIovecs := skiplist.ToContextIovecSlice(dummyContext)
 	if len(contextIovecs) != 0 {
 		t.Error("ToContextIovecSlice() on empty skiplist should return empty slice")
 	}
 
-	notContextIovecs := skiplist.ToNotContextIovecSlice(testContext)
+	notContextIovecs := skiplist.ToNotContextIovecSlice(dummyContext)
 	if len(notContextIovecs) != 0 {
 		t.Error("ToNotContextIovecSlice() on empty skiplist should return empty slice")
+	}
+
+	// Test CallbackToIovecSlice on empty skiplist
+	callbackIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		return true
+	})
+	if len(callbackIovecs) != 0 {
+		t.Error("CallbackToIovecSlice() on empty skiplist should return empty slice")
 	}
 
 	// Insert single item
@@ -1267,8 +1502,36 @@ func BenchmarkToIovecSlice(b *testing.B) {
 		skiplist.Insert(item, context)
 	}
 
+	dummyContext := TestContext{AccessCount: 999}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = skiplist.ToIovecSlice()
+		_ = skiplist.ToIovecSlice(dummyContext)
+	}
+}
+
+func BenchmarkCallbackToIovecSlice(b *testing.B) {
+	skiplist := MakeZeroCopySkiplist[TestItem, int, TestContext](
+		16,
+		getKeyFromTestItem,
+		getTestItemSize,
+		compareInt,
+	)
+
+	// Pre-populate
+	for i := 0; i < 1000; i++ {
+		item := &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
+		context := &TestContext{AccessCount: i}
+		skiplist.Insert(item, context)
+	}
+
+	// Callback that includes every other item
+	callback := func(item *ItemPtr[TestItem, int, TestContext]) bool {
+		return item.Key()%2 == 0
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = skiplist.CallbackToIovecSlice(callback)
 	}
 }
