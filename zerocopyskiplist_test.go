@@ -76,10 +76,10 @@ func createTestItems(count int) []*TestItem {
 	return items
 }
 
-func createTestContexts(count int) []*TestContext {
-	contexts := make([]*TestContext, count)
+func createTestContexts(count int) []TestContext {
+	contexts := make([]TestContext, count)
 	for i := 0; i < count; i++ {
-		contexts[i] = &TestContext{
+		contexts[i] = TestContext{
 			Timestamp:   time.Now().Unix() + int64(i),
 			AccessCount: i,
 			IsCached:    i%2 == 0,
@@ -108,7 +108,7 @@ func TestBasicOperations(t *testing.T) {
 	items := createTestItems(5)
 	contexts := createTestContexts(5)
 
-	// Test insert with context
+	// Test insert with context - now using value semantics
 	for i := 0; i < len(items); i++ {
 		if !skiplist.Insert(items[i], contexts[i]) {
 			t.Errorf("Insert should return true for new item %d", items[i].ID)
@@ -134,17 +134,18 @@ func TestInsertWithoutContext(t *testing.T) {
 
 	items := createTestItems(3)
 
-	// Test insert with explicit nil context
+	// Test insert with zero value context (instead of nil)
+	var zeroContext TestContext
 	for i := 0; i < len(items); i++ {
-		if !skiplist.Insert(items[i], nil) {
-			t.Errorf("Insert with nil context should return true for new item %d", items[i].ID)
+		if !skiplist.Insert(items[i], zeroContext) {
+			t.Errorf("Insert with zero context should return true for new item %d", items[i].ID)
 		}
 	}
 
-	// Test another insert with nil context
+	// Test another insert with zero context
 	extraItem := &TestItem{ID: 10, Value: "extra", Data: []byte("extra")}
-	if !skiplist.Insert(extraItem, nil) {
-		t.Error("Insert with nil context should return true for new item")
+	if !skiplist.Insert(extraItem, zeroContext) {
+		t.Error("Insert with zero context should return true for new item")
 	}
 
 	if skiplist.Length() != 4 {
@@ -161,7 +162,7 @@ func TestUpdateExistingItem(t *testing.T) {
 	)
 
 	originalItem := &TestItem{ID: 1, Value: "original", Data: []byte("original")}
-	originalContext := &TestContext{AccessCount: 5}
+	originalContext := TestContext{AccessCount: 5}
 
 	// Insert original
 	if !skiplist.Insert(originalItem, originalContext) {
@@ -169,7 +170,7 @@ func TestUpdateExistingItem(t *testing.T) {
 	}
 
 	updatedItem := &TestItem{ID: 1, Value: "updated", Data: []byte("updated")}
-	updatedContext := &TestContext{AccessCount: 10}
+	updatedContext := TestContext{AccessCount: 10}
 
 	// Update existing (should return false)
 	if skiplist.Insert(updatedItem, updatedContext) {
@@ -220,10 +221,15 @@ func TestDelete(t *testing.T) {
 		t.Errorf("Expected length 4 after delete, got %d", skiplist.Length())
 	}
 
-	// Verify item is gone
+	// Verify item is gone - context will be zero value, not nil
 	found, ctx := skiplist.Find(3)
-	if found != nil || ctx != nil {
+	if found != nil {
 		t.Error("Deleted item should not be found")
+	}
+	// ctx will be zero value of TestContext, not nil
+	var zeroContext TestContext
+	if ctx != zeroContext {
+		t.Error("Context should be zero value for non-existent item")
 	}
 
 	// Delete non-existent item
@@ -284,8 +290,9 @@ func TestFindOperations(t *testing.T) {
 
 	// Test finding non-existent item
 	found, ctx := skiplist.Find(999)
-	if found != nil || ctx != nil {
-		t.Error("Should not find non-existent item")
+	var zeroContext TestContext
+	if found != nil || ctx != zeroContext {
+		t.Error("Should not find non-existent item, context should be zero value")
 	}
 
 	foundItem := skiplist.FindItem(999)
@@ -303,7 +310,7 @@ func TestContextOperations(t *testing.T) {
 	)
 
 	item := &TestItem{ID: 1, Value: "test", Data: []byte("test")}
-	context := &TestContext{
+	context := TestContext{
 		Timestamp:   123456789,
 		AccessCount: 5,
 		IsCached:    true,
@@ -323,7 +330,7 @@ func TestContextOperations(t *testing.T) {
 	}
 
 	// Test SetContext() method
-	newContext := &TestContext{
+	newContext := TestContext{
 		Timestamp:   987654321,
 		AccessCount: 10,
 		IsCached:    false,
@@ -335,7 +342,7 @@ func TestContextOperations(t *testing.T) {
 	}
 
 	// Test UpdateContext() method
-	anotherContext := &TestContext{
+	anotherContext := TestContext{
 		Timestamp:   555555555,
 		AccessCount: 15,
 		IsCached:    true,
@@ -459,13 +466,14 @@ func TestCopy(t *testing.T) {
 		}
 
 		if ctxOrig != ctxCopy {
-			t.Errorf("Copy should reference same context pointers for item %d", items[i].ID)
+			t.Errorf("Copy should reference same context values for item %d", items[i].ID)
 		}
 	}
 
 	// Verify independence - modify copy shouldn't affect original
 	newItem := &TestItem{ID: 10, Value: "new", Data: []byte("new")}
-	copy.Insert(newItem, nil)
+	var zeroContext TestContext
+	copy.Insert(newItem, zeroContext)
 
 	if original.Length() == copy.Length() {
 		t.Error("Copy should be independent of original")
@@ -503,7 +511,7 @@ func TestCallbackToIovecSlice(t *testing.T) {
 	// ID=7 -> contextTypes[0] (type_A, cached=true)
 	for i := 0; i < len(items); i++ {
 		contextIndex := i % 3
-		skiplist.Insert(items[i], &contextTypes[contextIndex])
+		skiplist.Insert(items[i], contextTypes[contextIndex])
 	}
 
 	t.Logf("Distribution analysis:")
@@ -547,7 +555,7 @@ func TestCallbackToIovecSlice(t *testing.T) {
 	// Test 4: Include only cached items (5 items: 1,3,4,6,7)
 	cachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
 		ctx := item.Context()
-		return ctx != nil && ctx.IsCached
+		return ctx.IsCached // Direct access, no nil check needed
 	})
 
 	expectedCachedCount := 5 // Type A: 1,4,7 + Type C: 3,6 = 5 items
@@ -558,7 +566,7 @@ func TestCallbackToIovecSlice(t *testing.T) {
 	// Test 5: Include items with type_A context (3 items: 1,4,7)
 	typeAIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
 		ctx := item.Context()
-		return ctx != nil && ctx.MetadataKey == "type_A"
+		return ctx.MetadataKey == "type_A" // Direct access, no nil check needed
 	})
 
 	expectedTypeACount := 3 // IDs 1, 4, 7
@@ -569,7 +577,7 @@ func TestCallbackToIovecSlice(t *testing.T) {
 	// Test 6: Complex filter - even IDs AND cached (2 items: 4,6)
 	evenCachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
 		ctx := item.Context()
-		return item.Key()%2 == 0 && ctx != nil && ctx.IsCached
+		return item.Key()%2 == 0 && ctx.IsCached
 	})
 
 	// Analysis: Even IDs (2,4,6) - only 4,6 are cached (2 is type_B which is not cached)
@@ -581,7 +589,7 @@ func TestCallbackToIovecSlice(t *testing.T) {
 	// Test 7: Complex filter - odd IDs AND type_A (2 items: 1,7)
 	oddTypeAIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
 		ctx := item.Context()
-		return item.Key()%2 == 1 && ctx != nil && ctx.MetadataKey == "type_A"
+		return item.Key()%2 == 1 && ctx.MetadataKey == "type_A"
 	})
 
 	expectedOddTypeACount := 2 // IDs 1, 7 (both odd and type_A)
@@ -592,7 +600,7 @@ func TestCallbackToIovecSlice(t *testing.T) {
 	// Test 8: Complex filter - high access count AND not cached (2 items: 2,5)
 	highAccessNotCachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
 		ctx := item.Context()
-		return ctx != nil && ctx.AccessCount >= 20 && !ctx.IsCached
+		return ctx.AccessCount >= 20 && !ctx.IsCached
 	})
 
 	expectedHighAccessNotCachedCount := 2 // Type B items (IDs 2,5) have AccessCount=20 and are not cached
@@ -603,7 +611,7 @@ func TestCallbackToIovecSlice(t *testing.T) {
 	// Test 9: Verify the distributions add up correctly
 	notCachedIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, TestContext]) bool {
 		ctx := item.Context()
-		return ctx != nil && !ctx.IsCached
+		return !ctx.IsCached // Direct access, no nil check needed
 	})
 
 	if len(cachedIovecs)+len(notCachedIovecs) != 7 {
@@ -664,18 +672,13 @@ func TestCallbackToIovecSliceWithDifferentTypes(t *testing.T) {
 	contexts := []string{"main", "branch-tmp", "branch-feature"}
 
 	for i, item := range items {
-		ctx := contexts[i]
-		skiplist.Insert(item, &ctx)
+		skiplist.Insert(item, contexts[i])
 	}
 
 	// Test branch context filter
 	branchIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, string]) bool {
 		ctx := item.Context()
-		if ctx != nil {
-			contextStr := *ctx
-			return contextStr == "branch-tmp" || contextStr == "branch-feature"
-		}
-		return false
+		return ctx == "branch-tmp" || ctx == "branch-feature" // Direct value comparison
 	})
 
 	expectedBranchCount := 2 // "branch-tmp" and "branch-feature"
@@ -742,7 +745,7 @@ func TestToContextIovecSlice(t *testing.T) {
 	contexts := createTestContexts(4)
 
 	// Create a specific context to search for
-	targetContext := &TestContext{
+	targetContext := TestContext{
 		Timestamp:   999999,
 		AccessCount: 100,
 		IsCached:    true,
@@ -754,7 +757,7 @@ func TestToContextIovecSlice(t *testing.T) {
 	skiplist.Insert(items[2], contexts[2])   // different context
 	skiplist.Insert(items[3], targetContext) // target context
 
-	iovecs := skiplist.ToContextIovecSlice(*targetContext)
+	iovecs := skiplist.ToContextIovecSlice(targetContext)
 
 	// Should find 2 items with target context
 	expectedCount := 2
@@ -766,7 +769,7 @@ func TestToContextIovecSlice(t *testing.T) {
 	current := skiplist.First()
 	iovecIndex := 0
 	for current != nil {
-		if current.Context() != nil && *current.Context() == *targetContext {
+		if current.Context() == targetContext { // Direct value comparison
 			if iovecIndex >= len(iovecs) {
 				t.Error("Not enough iovecs for matching contexts")
 				break
@@ -795,7 +798,7 @@ func TestToNotContextIovecSlice(t *testing.T) {
 	contexts := createTestContexts(4)
 
 	// Create a specific context to exclude
-	excludeContext := &TestContext{
+	excludeContext := TestContext{
 		Timestamp:   999999,
 		AccessCount: 100,
 		IsCached:    true,
@@ -807,7 +810,7 @@ func TestToNotContextIovecSlice(t *testing.T) {
 	skiplist.Insert(items[2], contexts[2])    // different context
 	skiplist.Insert(items[3], excludeContext) // exclude context
 
-	iovecs := skiplist.ToNotContextIovecSlice(*excludeContext)
+	iovecs := skiplist.ToNotContextIovecSlice(excludeContext)
 
 	// Should find 2 items not matching exclude context
 	expectedCount := 2
@@ -819,7 +822,7 @@ func TestToNotContextIovecSlice(t *testing.T) {
 	current := skiplist.First()
 	iovecIndex := 0
 	for current != nil {
-		contextMatches := current.Context() != nil && *current.Context() == *excludeContext
+		contextMatches := current.Context() == excludeContext // Direct value comparison
 		if !contextMatches {
 			if iovecIndex >= len(iovecs) {
 				t.Error("Not enough iovecs for non-matching contexts")
@@ -857,7 +860,7 @@ func TestMerge(t *testing.T) {
 		{ID: 1, Value: "value1_sl1"},
 		{ID: 3, Value: "value3_sl1"},
 	}
-	contexts1 := []*TestContext{
+	contexts1 := []TestContext{
 		{AccessCount: 1},
 		{AccessCount: 3},
 	}
@@ -871,7 +874,7 @@ func TestMerge(t *testing.T) {
 		{ID: 2, Value: "value2_sl2"},
 		{ID: 3, Value: "value3_sl2"}, // Conflicting key
 	}
-	contexts2 := []*TestContext{
+	contexts2 := []TestContext{
 		{AccessCount: 2},
 		{AccessCount: 33}, // Different context for same key
 	}
@@ -962,7 +965,7 @@ func TestLargeDataset(t *testing.T) {
 	}
 
 	items := make([]*TestItem, numItems)
-	contexts := make([]*string, numItems)
+	contexts := make([]string, numItems)
 
 	// Create deterministic dataset
 	for i := 0; i < numItems; i++ {
@@ -978,12 +981,12 @@ func TestLargeDataset(t *testing.T) {
 
 		// Assign context deterministically - cycle through the 5 contexts
 		contextIndex := i % len(stringContexts)
-		contexts[i] = &stringContexts[contextIndex]
+		contexts[i] = stringContexts[contextIndex]
 	}
 
 	// Create deterministic insertion order (reverse order for worst-case scenario)
 	insertOrder := make([]*TestItem, numItems)
-	insertContexts := make([]*string, numItems)
+	insertContexts := make([]string, numItems)
 	for i := 0; i < numItems; i++ {
 		insertOrder[i] = items[numItems-1-i] // Reverse order
 		insertContexts[i] = contexts[numItems-1-i]
@@ -1022,9 +1025,11 @@ func TestLargeDataset(t *testing.T) {
 	start = time.Now()
 	for _, key := range searchKeys {
 		found, ctx := skiplist.Find(key)
-		if found == nil || ctx == nil {
-			t.Errorf("Should find item and context for key %d", key)
+		if found == nil {
+			t.Errorf("Should find item for key %d", key)
 		}
+		// ctx will be string value, not pointer - no nil check needed
+		_ = ctx
 	}
 	searchTime := time.Since(start)
 
@@ -1112,7 +1117,7 @@ func TestLargeDataset(t *testing.T) {
 	customIovecs := skiplist.CallbackToIovecSlice(func(item *ItemPtr[TestItem, int, string]) bool {
 		// Include items with ID divisible by 1000 and in "cache_hot" context
 		ctx := item.Context()
-		return item.Key()%1000 == 0 && ctx != nil && *ctx == "cache_hot"
+		return item.Key()%1000 == 0 && ctx == "cache_hot" // Direct value comparison
 	})
 	customIovecTime := time.Since(start)
 
@@ -1271,7 +1276,7 @@ func TestConcurrency(t *testing.T) {
 					Value: fmt.Sprintf("value_%d", id),
 					Data:  []byte(fmt.Sprintf("data_%d", id)),
 				}
-				context := &TestContext{
+				context := TestContext{
 					AccessCount: i,
 					IsCached:    i%2 == 0,
 				}
@@ -1302,9 +1307,8 @@ func TestConcurrency(t *testing.T) {
 				if found.Key() != id {
 					t.Errorf("Found wrong item for ID %d", id)
 				}
-				if ctx == nil {
-					t.Errorf("Should find context for ID %d", id)
-				}
+				// ctx is now TestContext value, not pointer - no nil check needed
+				_ = ctx
 			}
 		}(g)
 	}
@@ -1330,8 +1334,9 @@ func TestEdgeCases(t *testing.T) {
 	}
 
 	found, ctx := skiplist.Find(1)
-	if found != nil || ctx != nil {
-		t.Error("Find() on empty skiplist should return nil")
+	var zeroContext TestContext
+	if found != nil || ctx != zeroContext {
+		t.Error("Find() on empty skiplist should return nil and zero context")
 	}
 
 	if skiplist.Delete(1) {
@@ -1365,7 +1370,7 @@ func TestEdgeCases(t *testing.T) {
 
 	// Insert single item
 	item := &TestItem{ID: 1, Value: "single", Data: []byte("single")}
-	context := &TestContext{AccessCount: 1}
+	context := TestContext{AccessCount: 1}
 	skiplist.Insert(item, context)
 
 	// Test single item operations
@@ -1382,16 +1387,16 @@ func TestEdgeCases(t *testing.T) {
 		t.Error("Single item's Prev() should be nil")
 	}
 
-	// Test with nil context
+	// Test with zero context (instead of nil)
 	itemWithoutContext := &TestItem{ID: 2, Value: "no_context", Data: []byte("no_context")}
-	skiplist.Insert(itemWithoutContext, nil)
+	skiplist.Insert(itemWithoutContext, zeroContext)
 
 	found, ctx = skiplist.Find(2)
 	if found == nil {
-		t.Error("Should find item inserted with nil context")
+		t.Error("Should find item inserted with zero context")
 	}
-	if ctx != nil {
-		t.Error("Context should be nil for item inserted with nil context")
+	if ctx != zeroContext {
+		t.Error("Context should be zero value for item inserted with zero context")
 	}
 }
 
@@ -1405,10 +1410,10 @@ func BenchmarkInsert(b *testing.B) {
 	)
 
 	items := make([]*TestItem, b.N)
-	contexts := make([]*TestContext, b.N)
+	contexts := make([]TestContext, b.N)
 	for i := 0; i < b.N; i++ {
 		items[i] = &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
-		contexts[i] = &TestContext{AccessCount: i}
+		contexts[i] = TestContext{AccessCount: i}
 	}
 
 	b.ResetTimer()
@@ -1428,7 +1433,7 @@ func BenchmarkFind(b *testing.B) {
 	// Pre-populate
 	for i := 0; i < 10000; i++ {
 		item := &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
-		context := &TestContext{AccessCount: i}
+		context := TestContext{AccessCount: i}
 		skiplist.Insert(item, context)
 	}
 
@@ -1450,7 +1455,7 @@ func BenchmarkFindItem(b *testing.B) {
 	// Pre-populate
 	for i := 0; i < 10000; i++ {
 		item := &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
-		context := &TestContext{AccessCount: i}
+		context := TestContext{AccessCount: i}
 		skiplist.Insert(item, context)
 	}
 
@@ -1472,7 +1477,7 @@ func BenchmarkTraversal(b *testing.B) {
 	// Pre-populate
 	for i := 0; i < 1000; i++ {
 		item := &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
-		context := &TestContext{AccessCount: i}
+		context := TestContext{AccessCount: i}
 		skiplist.Insert(item, context)
 	}
 
@@ -1498,7 +1503,7 @@ func BenchmarkToIovecSlice(b *testing.B) {
 	// Pre-populate
 	for i := 0; i < 1000; i++ {
 		item := &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
-		context := &TestContext{AccessCount: i}
+		context := TestContext{AccessCount: i}
 		skiplist.Insert(item, context)
 	}
 
@@ -1521,7 +1526,7 @@ func BenchmarkCallbackToIovecSlice(b *testing.B) {
 	// Pre-populate
 	for i := 0; i < 1000; i++ {
 		item := &TestItem{ID: i, Value: fmt.Sprintf("value_%d", i)}
-		context := &TestContext{AccessCount: i}
+		context := TestContext{AccessCount: i}
 		skiplist.Insert(item, context)
 	}
 

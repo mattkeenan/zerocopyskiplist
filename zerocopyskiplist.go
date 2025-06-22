@@ -23,7 +23,7 @@ const (
 type ItemPtr[T any, K comparable, C comparable] struct {
 	item     *T
 	key      K
-	context  *C
+	context  C // Changed from *C to C (value semantics)
 	forward  []*ItemPtr[T, K, C]
 	backward *ItemPtr[T, K, C]
 	level    int
@@ -76,7 +76,7 @@ func makeZeroCopySkiplist[T any, K comparable, C comparable](
 }
 
 // Insert adds an item to the skiplist with optional context
-func (sl *ZeroCopySkiplist[T, K, C]) Insert(item *T, context *C) bool {
+func (sl *ZeroCopySkiplist[T, K, C]) Insert(item *T, context C) bool {
 	sl.rw.Lock()
 	defer sl.rw.Unlock()
 
@@ -98,9 +98,7 @@ func (sl *ZeroCopySkiplist[T, K, C]) Insert(item *T, context *C) bool {
 	// If key already exists, update item and context, return false
 	if current != nil && sl.cmpKey(current.key, key) == 0 {
 		current.item = item
-		if context != nil {
-			current.context = context
-		}
+		current.context = context // Always update context (no nil check needed for value types)
 		return false
 	}
 
@@ -222,7 +220,7 @@ func (sl *ZeroCopySkiplist[T, K, C]) IsEmpty() bool {
 }
 
 // Find returns the item and context for the given key
-func (sl *ZeroCopySkiplist[T, K, C]) Find(key K) (*ItemPtr[T, K, C], *C) {
+func (sl *ZeroCopySkiplist[T, K, C]) Find(key K) (*ItemPtr[T, K, C], C) {
 	return sl.search(key)
 }
 
@@ -276,20 +274,14 @@ func (sl *ZeroCopySkiplist[T, K, C]) ToIovecSlice(context C) []syscall.Iovec {
 // ToContextIovecSlice generates Iovec slices for items that match the context
 func (sl *ZeroCopySkiplist[T, K, C]) ToContextIovecSlice(context C) []syscall.Iovec {
 	return sl.CallbackToIovecSlice(func(item *ItemPtr[T, K, C]) bool {
-		if item.context != nil && *item.context == context {
-			return true
-		}
-		return false
+		return item.context == context // Direct value comparison (no pointer dereferencing)
 	})
 }
 
 // ToNotContextIovecSlice generates Iovec slices for items that don't match the context
 func (sl *ZeroCopySkiplist[T, K, C]) ToNotContextIovecSlice(context C) []syscall.Iovec {
 	return sl.CallbackToIovecSlice(func(item *ItemPtr[T, K, C]) bool {
-		if item.context == nil || *item.context != context {
-			return true
-		}
-		return false
+		return item.context != context // Direct value comparison (no pointer dereferencing)
 	})
 }
 
@@ -332,13 +324,13 @@ func (sl *ZeroCopySkiplist[T, K, C]) FindItem(key K) *ItemPtr[T, K, C] {
 	return item
 }
 
-// Context returns the context pointer
-func (ip *ItemPtr[T, K, C]) Context() *C {
+// Context returns the context value (changed from pointer to value)
+func (ip *ItemPtr[T, K, C]) Context() C {
 	return ip.context
 }
 
-// UpdateContext updates the context for an existing key
-func (sl *ZeroCopySkiplist[T, K, C]) UpdateContext(key K, context *C) bool {
+// UpdateContext updates the context for an existing key (changed parameter from *C to C)
+func (sl *ZeroCopySkiplist[T, K, C]) UpdateContext(key K, context C) bool {
 	item, _ := sl.search(key)
 	if item != nil {
 		sl.rw.Lock()
@@ -349,8 +341,8 @@ func (sl *ZeroCopySkiplist[T, K, C]) UpdateContext(key K, context *C) bool {
 	return false
 }
 
-// SetContext updates the context pointer
-func (ip *ItemPtr[T, K, C]) SetContext(context *C) {
+// SetContext updates the context value (changed parameter from *C to C)
+func (ip *ItemPtr[T, K, C]) SetContext(context C) {
 	ip.context = context
 }
 
@@ -359,8 +351,8 @@ func (ip *ItemPtr[T, K, C]) Key() K {
 	return ip.key
 }
 
-// search function updated to return context pointer
-func (sl *ZeroCopySkiplist[T, K, C]) search(key K) (*ItemPtr[T, K, C], *C) {
+// search function updated to return context value (changed from *C to C)
+func (sl *ZeroCopySkiplist[T, K, C]) search(key K) (*ItemPtr[T, K, C], C) {
 	sl.rw.RLock()
 	defer sl.rw.RUnlock()
 
@@ -380,7 +372,9 @@ func (sl *ZeroCopySkiplist[T, K, C]) search(key K) (*ItemPtr[T, K, C], *C) {
 		return current, current.context
 	}
 
-	return nil, nil
+	// Return zero value for context when not found (instead of nil)
+	var zeroContext C
+	return nil, zeroContext
 }
 
 // Next returns the next item in sorted order
